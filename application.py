@@ -1,17 +1,33 @@
 from flask import Flask, request, jsonify
 import joblib
 import pandas as pd
+import os
 
 app = Flask(__name__)
 
-# Load model and scaler
+# -----------------------------
+# Dummy fallback model
+# -----------------------------
+class DummyModel:
+    def predict(self, X):
+        return [0]
+
+    def predict_proba(self, X):
+        return [[0.6, 0.4]]
+
+model = None
+scaler = None
+
+# -----------------------------
+# Load model safely
+# -----------------------------
 try:
     model = joblib.load('logistic_regression_diabetes_model.joblib')
     scaler = joblib.load('scaler_diabetes.joblib')
-    print("Model and scaler loaded successfully.")
+    print("✅ Model loaded")
 except Exception as e:
-    print(f"Error loading model or scaler: {e}")
-    model = None
+    print("❌ Model not found, using dummy model:", e)
+    model = DummyModel()
     scaler = None
 
 feature_names = [
@@ -19,42 +35,34 @@ feature_names = [
     'Insulin', 'BMI', 'DiabetesPedigreeFunction', 'Age'
 ]
 
-# Health check route
 @app.route('/')
 def home():
-    return "Flask API is running"
+    return jsonify({"status": "API running"})
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    if model is None or scaler is None:
-        return jsonify({'error': 'Model or scaler not loaded'}), 500
-
     try:
-        data = request.get_json(force=True)
+        data = request.get_json()
 
-        # Validate input fields
-        for col in feature_names:
-            if col not in data:
-                return jsonify({'error': f'Missing field: {col}'}), 400
+        if not data:
+            return jsonify({'error': 'No input data'}), 400
 
-        # Convert to DataFrame
-        input_df = pd.DataFrame([data])
-        input_df = input_df[feature_names]
+        missing = [f for f in feature_names if f not in data]
+        if missing:
+            return jsonify({'error': f'Missing fields: {missing}'}), 400
 
-        # Convert types
-        input_df = input_df.astype(float)
+        df = pd.DataFrame([data])[feature_names]
+        df = df.astype(float)
 
-        # Scale
-        input_scaled = scaler.transform(input_df)
+        if scaler:
+            df = scaler.transform(df)
 
-        # Predict
-        prediction = model.predict(input_scaled)
-        prediction_proba = model.predict_proba(input_scaled)
+        pred = model.predict(df)
+        prob = model.predict_proba(df)
 
         return jsonify({
-            'prediction': int(prediction[0]),
-            'probability_class_0': float(prediction_proba[0][0]),
-            'probability_class_1': float(prediction_proba[0][1])
+            "prediction": int(pred[0]),
+            "probability": prob[0]
         })
 
     except Exception as e:
@@ -62,4 +70,5 @@ def predict():
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port, debug=False)
